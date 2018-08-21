@@ -83,8 +83,11 @@ func (pm *PreparedMessage) frame(key prepareKey) (int, []byte, error) {
 			isServer:               key.isServer,
 			compressionLevel:       key.compressionLevel,
 			enableWriteCompression: true,
-			writeBuf:               make([]byte, defaultWriteBufferSize+maxFrameHeaderSize),
+			ioBuf: ioBuf{
+				writeBuf: defaultWriteBufPool.Get().([]byte),
+			},
 		}
+		defer c.ioBuf.cleanup()
 		if key.compress {
 			c.newCompressionWriter = compressNoContextTakeover
 		}

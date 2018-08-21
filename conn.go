@@ -5,7 +5,6 @@
 package websocket
 
 import (
-	"bufio"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -230,9 +229,11 @@ type Conn struct {
 	isServer    bool
 	subprotocol string
 
+	// Reusable I/O fields
+	ioBuf
+
 	// Write fields
 	mu            chan bool // used as mutex to protect write to conn
-	writeBuf      []byte    // frame is constructed in this buffer.
 	writeDeadline time.Time
 	writer        io.WriteCloser // the current writer returned to the application
 	isWriting     bool           // for best-effort concurrent write detection
@@ -247,7 +248,6 @@ type Conn struct {
 	// Read fields
 	reader        io.ReadCloser // the current reader returned to the application
 	readErr       error
-	br            *bufio.Reader
 	readRemaining int64 // bytes remaining in current frame.
 	readFinal     bool  // true the current message has more frames.
 	readLength    int64 // Message size.
@@ -264,10 +264,6 @@ type Conn struct {
 	newDecompressionReader func(io.Reader) io.ReadCloser
 }
 
-func newConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int) *Conn {
-	return newConnBRW(conn, isServer, readBufferSize, writeBufferSize, nil)
-}
-
 // writeHook is an io.Writer that steals the buffer that it is called with.
 type writeHook struct {
 	p []byte
@@ -278,60 +274,20 @@ func (wh *writeHook) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func newConnBRW(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int, brw *bufio.ReadWriter) *Conn {
+func newConn(conn net.Conn, isServer bool, iob ioBuf) *Conn {
 	mu := make(chan bool, 1)
 	mu <- true
 
-	var br *bufio.Reader
-	if readBufferSize == 0 && brw != nil && brw.Reader != nil {
-		// Reuse the supplied bufio.Reader if the buffer has a useful size.
-		// This code assumes that peek on a reader returns
-		// bufio.Reader.buf[:0].
-		brw.Reader.Reset(conn)
-		if p, err := brw.Reader.Peek(0); err == nil && cap(p) >= 256 {
-			br = brw.Reader
-		}
-	}
-	if br == nil {
-		if readBufferSize == 0 {
-			readBufferSize = defaultReadBufferSize
-		}
-		if readBufferSize < maxControlFramePayloadSize {
-			readBufferSize = maxControlFramePayloadSize
-		}
-		br = bufio.NewReaderSize(conn, readBufferSize)
-	}
-
-	var writeBuf []byte
-	if writeBufferSize == 0 && brw != nil && brw.Writer != nil {
-		// Use the bufio.Writer's buffer if the buffer has a useful size. This
-		// code assumes that bufio.Writer.buf[:1] is passed to the
-		// bufio.Writer's underlying writer.
-		var wh writeHook
-		brw.Writer.Reset(&wh)
-		brw.Writer.WriteByte(0)
-		brw.Flush()
-		if cap(wh.p) >= maxFrameHeaderSize+256 {
-			writeBuf = wh.p[:cap(wh.p)]
-		}
-	}
-
-	if writeBuf == nil {
-		if writeBufferSize == 0 {
-			writeBufferSize = defaultWriteBufferSize
-		}
-		writeBuf = make([]byte, writeBufferSize+maxFrameHeaderSize)
-	}
+	iob.br.Reset(conn)
 
 	c := &Conn{
 		isServer:               isServer,
-		br:                     br,
 		conn:                   conn,
 		mu:                     mu,
 		readFinal:              true,
-		writeBuf:               writeBuf,
 		enableWriteCompression: true,
 		compressionLevel:       defaultCompressionLevel,
+		ioBuf:                  iob,
 	}
 	c.SetCloseHandler(nil)
 	c.SetPingHandler(nil)
@@ -347,6 +303,7 @@ func (c *Conn) Subprotocol() string {
 // Close closes the underlying network connection without sending or waiting
 // for a close message.
 func (c *Conn) Close() error {
+	defer c.ioBuf.cleanup()
 	return c.conn.Close()
 }
 

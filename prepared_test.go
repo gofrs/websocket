@@ -36,7 +36,8 @@ func TestPreparedMessage(t *testing.T) {
 	for _, tt := range preparedMessageTests {
 		var data = []byte("this is a test")
 		var buf bytes.Buffer
-		c := newConn(fakeNetConn{Reader: nil, Writer: &buf}, tt.isServer, 1024, 1024)
+		c := newConn(fakeNetConn{Reader: nil, Writer: &buf}, tt.isServer, (&Upgrader{}).getIOBuf())
+		defer c.Close()
 		if tt.enableWriteCompression {
 			c.newCompressionWriter = compressNoContextTakeover
 		}

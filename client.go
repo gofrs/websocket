@@ -82,6 +82,22 @@ type Dialer struct {
 	// If Jar is nil, cookies are not sent in requests and ignored
 	// in responses.
 	Jar http.CookieJar
+
+	// WriteBufferPool is a Pool used to obtain write buffers.
+	// If a non-nil value is supplied, the WriteBufferSize field is ignored.
+	// If WriteBufferPool is nil and WriteBufferSize is not set, an internal
+	// pool will be used. Otherwise, new buffers will be allocated.
+	// If Get returns a value that is not a []byte with len > 0,
+	// bad things will happen. You have been warned.
+	WriteBufferPool Pool
+
+	// BufReaderPool is a Pool used to obtain bufio.Readers.
+	// If a non-nil value is supplied, the ReadBufferSize field is ignored.
+	// If BufReaderPool is nil and ReadBufferSize is not set, an internal
+	// pool will be used. Otherwise, new bufio.Readers will be allocated.
+	// If Get returns a value that is not a *bufio.Reader,
+	// bad things will happen. You have been warned.
+	BufReaderPool Pool
 }
 
 var errMalformedURL = errors.New("malformed ws or wss URL")
@@ -275,7 +291,7 @@ func (d *Dialer) Dial(urlStr string, requestHeader http.Header) (*Conn, *http.Re
 		}
 	}
 
-	conn := newConn(netConn, false, d.ReadBufferSize, d.WriteBufferSize)
+	conn := newConn(netConn, false, d.getIOBuf())
 
 	if err := req.Write(netConn); err != nil {
 		return nil, nil, err

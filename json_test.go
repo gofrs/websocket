@@ -15,8 +15,10 @@ import (
 func TestJSON(t *testing.T) {
 	var buf bytes.Buffer
 	c := fakeNetConn{&buf, &buf}
-	wc := newConn(c, true, 1024, 1024)
-	rc := newConn(c, false, 1024, 1024)
+	wc := newConn(c, true, (&Upgrader{}).getIOBuf())
+	defer wc.Close()
+	rc := newConn(c, false, (&Upgrader{}).getIOBuf())
+	defer rc.Close()
 
 	var actual, expect struct {
 		A int
@@ -41,8 +43,10 @@ func TestJSON(t *testing.T) {
 func TestPartialJSONRead(t *testing.T) {
 	var buf bytes.Buffer
 	c := fakeNetConn{&buf, &buf}
-	wc := newConn(c, true, 1024, 1024)
-	rc := newConn(c, false, 1024, 1024)
+	wc := newConn(c, true, (&Upgrader{}).getIOBuf())
+	defer wc.Close()
+	rc := newConn(c, false, (&Upgrader{}).getIOBuf())
+	defer rc.Close()
 
 	var v struct {
 		A int
@@ -95,8 +99,10 @@ func TestPartialJSONRead(t *testing.T) {
 func TestDeprecatedJSON(t *testing.T) {
 	var buf bytes.Buffer
 	c := fakeNetConn{&buf, &buf}
-	wc := newConn(c, true, 1024, 1024)
-	rc := newConn(c, false, 1024, 1024)
+	wc := newConn(c, true, (&Upgrader{}).getIOBuf())
+	defer wc.Close()
+	rc := newConn(c, false, (&Upgrader{}).getIOBuf())
+	defer rc.Close()
 
 	var actual, expect struct {
 		A int

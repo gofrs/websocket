@@ -58,6 +58,22 @@ type Upgrader struct {
 	// guarantee that compression will be supported. Currently only "no context
 	// takeover" modes are supported.
 	EnableCompression bool
+
+	// WriteBufferPool is a Pool used to obtain write buffers.
+	// If a non-nil value is supplied, the WriteBufferSize field is ignored.
+	// If WriteBufferPool is nil and WriteBufferSize is not set, an internal
+	// pool will be used. Otherwise, new buffers will be allocated.
+	// If Get returns a value that is not a []byte with len > 0,
+	// bad things will happen. You have been warned.
+	WriteBufferPool Pool
+
+	// BufReaderPool is a Pool used to obtain bufio.Readers.
+	// If a non-nil value is supplied, the ReadBufferSize field is ignored.
+	// If BufReaderPool is nil and ReadBufferSize is not set, an internal
+	// pool will be used. Otherwise, new bufio.Readers will be allocated.
+	// If Get returns a value that is not a *bufio.Reader,
+	// bad things will happen. You have been warned.
+	BufReaderPool Pool
 }
 
 func (u *Upgrader) returnError(w http.ResponseWriter, r *http.Request, status int, reason string) (*Conn, error) {
@@ -173,7 +189,7 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 		return nil, errors.New("websocket: client sent data before handshake is complete")
 	}
 
-	c := newConnBRW(netConn, true, u.ReadBufferSize, u.WriteBufferSize, brw)
+	c := newConn(netConn, true, u.getIOBuf())
 	c.subprotocol = subprotocol
 
 	if compress {

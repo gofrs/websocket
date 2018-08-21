@@ -18,6 +18,13 @@ import (
 	"time"
 )
 
+func newTestConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int) *Conn {
+	return newConn(conn, isServer, (&Upgrader{
+		ReadBufferSize:  readBufferSize,
+		WriteBufferSize: writeBufferSize,
+	}).getIOBuf())
+}
+
 var _ net.Error = errWriteTimeout
 
 type fakeNetConn struct {
@@ -82,8 +89,10 @@ func TestFraming(t *testing.T) {
 			for _, chunker := range readChunkers {
 
 				var connBuf bytes.Buffer
-				wc := newConn(fakeNetConn{Reader: nil, Writer: &connBuf}, isServer, 1024, 1024)
-				rc := newConn(fakeNetConn{Reader: chunker.f(&connBuf), Writer: nil}, !isServer, 1024, 1024)
+				wc := newConn(fakeNetConn{Reader: nil, Writer: &connBuf}, isServer, (&Upgrader{}).getIOBuf())
+				defer wc.Close()
+				rc := newConn(fakeNetConn{Reader: chunker.f(&connBuf), Writer: nil}, !isServer, (&Upgrader{}).getIOBuf())
+				defer rc.Close()
 				if compress {
 					wc.newCompressionWriter = compressNoContextTakeover
 					rc.newDecompressionReader = decompressNoContextTakeover
@@ -143,8 +152,10 @@ func TestControl(t *testing.T) {
 		for _, isWriteControl := range []bool{true, false} {
 			name := fmt.Sprintf("s:%v, wc:%v", isServer, isWriteControl)
 			var connBuf bytes.Buffer
-			wc := newConn(fakeNetConn{Reader: nil, Writer: &connBuf}, isServer, 1024, 1024)
-			rc := newConn(fakeNetConn{Reader: &connBuf, Writer: nil}, !isServer, 1024, 1024)
+			wc := newConn(fakeNetConn{Reader: nil, Writer: &connBuf}, isServer, (&Upgrader{}).getIOBuf())
+			defer wc.Close()
+			rc := newConn(fakeNetConn{Reader: &connBuf, Writer: nil}, !isServer, (&Upgrader{}).getIOBuf())
+			defer wc.Close()
 			if isWriteControl {
 				wc.WriteControl(PongMessage, []byte(message), time.Now().Add(time.Second))
 			} else {
@@ -179,8 +190,10 @@ func TestCloseFrameBeforeFinalMessageFrame(t *testing.T) {
 	expectedErr := &CloseError{Code: CloseNormalClosure, Text: "hello"}
 
 	var b1, b2 bytes.Buffer
-	wc := newConn(fakeNetConn{Reader: nil, Writer: &b1}, false, 1024, bufSize)
-	rc := newConn(fakeNetConn{Reader: &b1, Writer: &b2}, true, 1024, 1024)
+	wc := newTestConn(fakeNetConn{Reader: nil, Writer: &b1}, false, 1024, bufSize)
+	defer wc.Close()
+	rc := newConn(fakeNetConn{Reader: &b1, Writer: &b2}, true, (&Upgrader{}).getIOBuf())
+	defer rc.Close()
 
 	w, _ := wc.NextWriter(BinaryMessage)
 	w.Write(make([]byte, bufSize+bufSize/2))
@@ -206,8 +219,8 @@ func TestEOFWithinFrame(t *testing.T) {
 
 	for n := 0; ; n++ {
 		var b bytes.Buffer
-		wc := newConn(fakeNetConn{Reader: nil, Writer: &b}, false, 1024, 1024)
-		rc := newConn(fakeNetConn{Reader: &b, Writer: nil}, true, 1024, 1024)
+		wc := newConn(fakeNetConn{Reader: nil, Writer: &b}, false, (&Upgrader{}).getIOBuf())
+		rc := newConn(fakeNetConn{Reader: &b, Writer: nil}, true, (&Upgrader{}).getIOBuf())
 
 		w, _ := wc.NextWriter(BinaryMessage)
 		w.Write(make([]byte, bufSize))
@@ -240,8 +253,10 @@ func TestEOFBeforeFinalFrame(t *testing.T) {
 	const bufSize = 512
 
 	var b1, b2 bytes.Buffer
-	wc := newConn(fakeNetConn{Reader: nil, Writer: &b1}, false, 1024, bufSize)
-	rc := newConn(fakeNetConn{Reader: &b1, Writer: &b2}, true, 1024, 1024)
+	wc := newTestConn(fakeNetConn{Reader: nil, Writer: &b1}, false, 1024, bufSize)
+	defer wc.Close()
+	rc := newConn(fakeNetConn{Reader: &b1, Writer: &b2}, true, (&Upgrader{}).getIOBuf())
+	defer rc.Close()
 
 	w, _ := wc.NextWriter(BinaryMessage)
 	w.Write(make([]byte, bufSize+bufSize/2))
@@ -261,7 +276,8 @@ func TestEOFBeforeFinalFrame(t *testing.T) {
 }
 
 func TestWriteAfterMessageWriterClose(t *testing.T) {
-	wc := newConn(fakeNetConn{Reader: nil, Writer: &bytes.Buffer{}}, false, 1024, 1024)
+	wc := newConn(fakeNetConn{Reader: nil, Writer: &bytes.Buffer{}}, false, (&Upgrader{}).getIOBuf())
+	defer wc.Close()
 	w, _ := wc.NextWriter(BinaryMessage)
 	io.WriteString(w, "hello")
 	if err := w.Close(); err != nil {
@@ -292,8 +308,10 @@ func TestReadLimit(t *testing.T) {
 	message := make([]byte, readLimit+1)
 
 	var b1, b2 bytes.Buffer
-	wc := newConn(fakeNetConn{Reader: nil, Writer: &b1}, false, 1024, readLimit-2)
-	rc := newConn(fakeNetConn{Reader: &b1, Writer: &b2}, true, 1024, 1024)
+	wc := newTestConn(fakeNetConn{Reader: nil, Writer: &b1}, false, 1024, readLimit-2)
+	defer wc.Close()
+	rc := newConn(fakeNetConn{Reader: &b1, Writer: &b2}, true, (&Upgrader{}).getIOBuf())
+	defer rc.Close()
 	rc.SetReadLimit(readLimit)
 
 	// Send message at the limit with interleaved pong.
@@ -321,7 +339,8 @@ func TestReadLimit(t *testing.T) {
 }
 
 func TestAddrs(t *testing.T) {
-	c := newConn(&fakeNetConn{}, true, 1024, 1024)
+	c := newConn(&fakeNetConn{}, true, (&Upgrader{}).getIOBuf())
+	defer c.Close()
 	if c.LocalAddr() != localAddr {
 		t.Errorf("LocalAddr = %v, want %v", c.LocalAddr(), localAddr)
 	}
@@ -333,7 +352,7 @@ func TestAddrs(t *testing.T) {
 func TestUnderlyingConn(t *testing.T) {
 	var b1, b2 bytes.Buffer
 	fc := fakeNetConn{Reader: &b1, Writer: &b2}
-	c := newConn(fc, true, 1024, 1024)
+	c := newConn(fc, true, (&Upgrader{}).getIOBuf())
 	ul := c.UnderlyingConn()
 	if ul != fc {
 		t.Fatalf("Underlying conn is not what it should be.")
@@ -347,8 +366,10 @@ func TestBufioReadBytes(t *testing.T) {
 	m[len(m)-1] = '\n'
 
 	var b1, b2 bytes.Buffer
-	wc := newConn(fakeNetConn{Reader: nil, Writer: &b1}, false, len(m)+64, len(m)+64)
-	rc := newConn(fakeNetConn{Reader: &b1, Writer: &b2}, true, len(m)-64, len(m)-64)
+	wc := newTestConn(fakeNetConn{Reader: nil, Writer: &b1}, false, len(m)+64, len(m)+64)
+	defer wc.Close()
+	rc := newTestConn(fakeNetConn{Reader: &b1, Writer: &b2}, true, len(m)-64, len(m)-64)
+	defer rc.Close()
 
 	w, _ := wc.NextWriter(BinaryMessage)
 	w.Write(m)
@@ -423,7 +444,8 @@ func (w blockingWriter) Write(p []byte) (int, error) {
 
 func TestConcurrentWritePanic(t *testing.T) {
 	w := blockingWriter{make(chan struct{}), make(chan struct{})}
-	c := newConn(fakeNetConn{Reader: nil, Writer: w}, false, 1024, 1024)
+	c := newConn(fakeNetConn{Reader: nil, Writer: w}, false, (&Upgrader{}).getIOBuf())
+	defer c.Close()
 	go func() {
 		c.WriteMessage(TextMessage, []byte{})
 	}()
@@ -449,7 +471,8 @@ func (r failingReader) Read(p []byte) (int, error) {
 }
 
 func TestFailedConnectionReadPanic(t *testing.T) {
-	c := newConn(fakeNetConn{Reader: failingReader{}, Writer: nil}, false, 1024, 1024)
+	c := newConn(fakeNetConn{Reader: failingReader{}, Writer: nil}, false, (&Upgrader{}).getIOBuf())
+	defer c.Close()
 
 	defer func() {
 		if v := recover(); v != nil {
@@ -461,36 +484,4 @@ func TestFailedConnectionReadPanic(t *testing.T) {
 		c.ReadMessage()
 	}
 	t.Fatal("should not get here")
-}
-
-func TestBufioReuse(t *testing.T) {
-	brw := bufio.NewReadWriter(bufio.NewReader(nil), bufio.NewWriter(nil))
-	c := newConnBRW(nil, false, 0, 0, brw)
-
-	if c.br != brw.Reader {
-		t.Error("connection did not reuse bufio.Reader")
-	}
-
-	var wh writeHook
-	brw.Writer.Reset(&wh)
-	brw.WriteByte(0)
-	brw.Flush()
-	if &c.writeBuf[0] != &wh.p[0] {
-		t.Error("connection did not reuse bufio.Writer")
-	}
-
-	brw = bufio.NewReadWriter(bufio.NewReaderSize(nil, 0), bufio.NewWriterSize(nil, 0))
-	c = newConnBRW(nil, false, 0, 0, brw)
-
-	if c.br == brw.Reader {
-		t.Error("connection used bufio.Reader with small size")
-	}
-
-	brw.Writer.Reset(&wh)
-	brw.WriteByte(0)
-	brw.Flush()
-	if &c.writeBuf[0] != &wh.p[0] {
-		t.Error("connection used bufio.Writer with small size")
-	}
-
 }
