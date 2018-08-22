@@ -97,6 +97,10 @@ func (u *Upgrader) getIOBuf() ioBuf {
 
 // getIOBuf gets a set of I/O buffers, pooling based on the Dialer settings.
 func (d *Dialer) getIOBuf() ioBuf {
+	if d == nil {
+		d = &nilDialer
+	}
+
 	var writeBuf []byte
 	var writeBufPut putFunc
 	switch {
